@@ -1,100 +1,287 @@
 import { useEffect, useState } from 'react'
 import {
 	ActivityIndicator,
+	FlatList,
 	Image,
 	Linking,
-	ScrollView,
+	RefreshControl,
 	StyleSheet,
 	Text,
 	TouchableOpacity,
 	View,
 } from 'react-native'
 
-const WP_API = 'https://kinsta.com/wp-json/wp/v2/posts?per_page=3&_embed'
+const API_URL = 'https://eldinero.com.do/wp-json/wp/v2/posts?per_page=15&_embed'
+const COLOR = '#f0a500'
 
-export default function NoticiasScreen() {
-	const [posts, setPosts] = useState([])
-	const [cargando, setCargando] = useState(true)
+function limpiarHTML(texto) {
+	if (!texto) return ''
+	return texto
+		.replace(/<[^>]+>/g, '')
+		.replace(/&nbsp;/g, ' ')
+		.replace(/&amp;/g, '&')
+		.replace(/&quot;/g, '"')
+		.replace(/&#8217;/g, "'")
+		.replace(/&#8216;/g, "'")
+		.replace(/&#8220;/g, '"')
+		.replace(/&#8221;/g, '"')
+		.replace(/\n/g, ' ')
+		.trim()
+}
 
-	useEffect(() => {
-		fetch(WP_API)
-			.then((r) => r.json())
-			.then((data) => {
-				setPosts(data)
-				setCargando(false)
-			})
-			.catch(() => setCargando(false))
-	}, [])
+function formatearFecha(fechaISO) {
+	if (!fechaISO) return ''
+	try {
+		return new Date(fechaISO).toLocaleDateString('es-DO', {
+			day: 'numeric',
+			month: 'long',
+			year: 'numeric',
+		})
+	} catch {
+		return ''
+	}
+}
 
-	const getImg = (post) => post._embedded?.['wp:featuredmedia']?.[0]?.source_url
-	const stripHtml = (html) => html?.replace(/<[^>]+>/g, '') ?? ''
+function obtenerImagen(post) {
+	try {
+		const media = post._embedded?.['wp:featuredmedia']
+		const sizes = media?.[0]?.media_details?.sizes
+		return (
+			sizes?.large?.source_url ||
+			sizes?.medium?.source_url ||
+			media?.[0]?.source_url ||
+			null
+		)
+	} catch {
+		return null
+	}
+}
+
+function obtenerCategoria(post) {
+	try {
+		return post._embedded?.['wp:term']?.[0]?.[0]?.name || ''
+	} catch {
+		return ''
+	}
+}
+
+// ── Tarjeta ──────────────────────────────────────────────
+function Tarjeta({ post }) {
+	const imagen = obtenerImagen(post)
+	const titulo = limpiarHTML(post.title?.rendered)
+	const resumen = limpiarHTML(post.excerpt?.rendered)
+	const fecha = formatearFecha(post.date)
+	const categoria = obtenerCategoria(post)
 
 	return (
-		<ScrollView contentContainerStyle={styles.container}>
-			<Text style={styles.title}>📰 Últimas Noticias</Text>
-			<Text style={styles.site}>kinsta.com</Text>
-
-			{cargando && <ActivityIndicator size='large' color='#e94560' />}
-
-			{posts.map((post) => (
-				<View key={post.id} style={styles.card}>
-					{getImg(post) && (
-						<Image source={{ uri: getImg(post) }} style={styles.thumbnail} />
-					)}
-					<View style={styles.content}>
-						<Text style={styles.postTitle}>
-							{stripHtml(post.title?.rendered)}
-						</Text>
-						<Text style={styles.excerpt} numberOfLines={3}>
-							{stripHtml(post.excerpt?.rendered)}
-						</Text>
-						<TouchableOpacity
-							style={styles.visitBtn}
-							onPress={() => Linking.openURL(post.link)}
-						>
-							<Text style={styles.visitText}>🔗 Visitar noticia</Text>
-						</TouchableOpacity>
-					</View>
+		<TouchableOpacity
+			style={styles.card}
+			onPress={() => Linking.openURL(post.link)}
+			activeOpacity={0.85}
+		>
+			{imagen ? (
+				<Image
+					source={{ uri: imagen }}
+					style={styles.imagen}
+					resizeMode='cover'
+				/>
+			) : (
+				<View style={styles.placeholder}>
+					<Text style={{ fontSize: 40 }}>💰</Text>
 				</View>
-			))}
-		</ScrollView>
+			)}
+
+			{categoria !== '' && (
+				<View style={styles.badge}>
+					<Text style={styles.badgeTexto}>{categoria.toUpperCase()}</Text>
+				</View>
+			)}
+
+			<View style={styles.cuerpo}>
+				<Text style={styles.fecha}>📅 {fecha}</Text>
+				<Text style={styles.titulo} numberOfLines={3}>
+					{titulo}
+				</Text>
+				{resumen.length > 10 && (
+					<Text style={styles.resumen} numberOfLines={2}>
+						{resumen}
+					</Text>
+				)}
+				<Text style={styles.leerMas}>Leer noticia completa →</Text>
+			</View>
+		</TouchableOpacity>
 	)
 }
 
+// ── Pantalla principal ───────────────────────────────────
+export default function NoticiasScreen() {
+	const [posts, setPosts] = useState([])
+	const [cargando, setCargando] = useState(true)
+	const [refrescando, setRefrescando] = useState(false)
+	const [error, setError] = useState('')
+
+	useEffect(() => {
+		cargar()
+	}, [])
+
+	const cargar = async (esRefresco = false) => {
+		esRefresco ? setRefrescando(true) : setCargando(true)
+		setError('')
+		try {
+			const res = await fetch(API_URL)
+			if (!res.ok) throw new Error(`Error ${res.status}`)
+			const data = await res.json()
+			if (!Array.isArray(data)) throw new Error('Formato inválido')
+			setPosts(data.filter((p) => p.title?.rendered))
+		} catch (e) {
+			setError(e.message)
+		} finally {
+			setCargando(false)
+			setRefrescando(false)
+		}
+	}
+
+	if (cargando)
+		return (
+			<View style={styles.centrado}>
+				<ActivityIndicator size='large' color={COLOR} />
+				<Text style={styles.cargandoTexto}>Cargando noticias...</Text>
+			</View>
+		)
+
+	if (error)
+		return (
+			<View style={styles.centrado}>
+				<Text style={{ fontSize: 48, marginBottom: 12 }}>📡</Text>
+				<Text style={styles.errorTexto}>{error}</Text>
+				<TouchableOpacity style={styles.btnReintentar} onPress={() => cargar()}>
+					<Text style={styles.btnReintentarTexto}>Reintentar</Text>
+				</TouchableOpacity>
+			</View>
+		)
+
+	return (
+		<View style={styles.container}>
+			<FlatList
+				data={posts}
+				keyExtractor={(item) => item.id.toString()}
+				contentContainerStyle={styles.lista}
+				showsVerticalScrollIndicator={false}
+				ListHeaderComponent={
+					<View style={styles.header}>
+						<Text style={styles.headerNombre}>El Dinero</Text>
+						<Text style={styles.headerSlogan}>
+							Economía · Negocios · Finanzas
+						</Text>
+						<View style={styles.lineaHeader} />
+						<Text style={styles.headerSub}>
+							🇩🇴 {posts.length} noticias recientes
+						</Text>
+					</View>
+				}
+				renderItem={({ item }) => <Tarjeta post={item} />}
+				refreshControl={
+					<RefreshControl
+						refreshing={refrescando}
+						onRefresh={() => cargar(true)}
+						colors={[COLOR]}
+						tintColor={COLOR}
+					/>
+				}
+			/>
+		</View>
+	)
+}
+
+// ── Estilos ──────────────────────────────────────────────
 const styles = StyleSheet.create({
-	container: { flexGrow: 1, backgroundColor: '#1a1a2e', padding: 20 },
-	title: {
-		fontSize: 22,
-		fontWeight: 'bold',
-		color: '#e94560',
-		textAlign: 'center',
+	container: { flex: 1, backgroundColor: '#0a0a0a' },
+	centrado: {
+		flex: 1,
+		backgroundColor: '#0a0a0a',
+		alignItems: 'center',
+		justifyContent: 'center',
+		padding: 24,
 	},
-	site: { color: '#888', fontSize: 13, textAlign: 'center', marginBottom: 20 },
+	lista: { padding: 14, paddingBottom: 32 },
+
+	header: { alignItems: 'center', paddingVertical: 28, marginBottom: 4 },
+	headerNombre: {
+		fontSize: 36,
+		fontWeight: '900',
+		color: '#f0a500',
+		letterSpacing: 1,
+	},
+	headerSlogan: { color: '#555', fontSize: 13, marginTop: 4 },
+	lineaHeader: {
+		width: '30%',
+		height: 3,
+		backgroundColor: '#f0a500',
+		marginVertical: 12,
+		borderRadius: 2,
+	},
+	headerSub: { color: '#444', fontSize: 12 },
+
 	card: {
-		backgroundColor: '#16213e',
+		backgroundColor: '#141414',
 		borderRadius: 16,
-		marginBottom: 20,
+		marginBottom: 18,
 		overflow: 'hidden',
 		borderWidth: 1,
-		borderColor: '#ffffff15',
+		borderColor: '#1f1f1f',
 	},
-	thumbnail: { width: '100%', height: 160 },
-	content: { padding: 14 },
-	postTitle: {
-		color: '#fff',
-		fontWeight: 'bold',
-		fontSize: 16,
-		marginBottom: 6,
-	},
-	excerpt: { color: '#aaa', fontSize: 13, lineHeight: 20 },
-	visitBtn: {
-		marginTop: 12,
-		backgroundColor: '#e9456022',
-		borderRadius: 10,
-		padding: 12,
+	imagen: { width: '100%', height: 200 },
+	placeholder: {
+		width: '100%',
+		height: 120,
+		backgroundColor: '#1a1a1a',
 		alignItems: 'center',
-		borderWidth: 1,
-		borderColor: '#e94560',
+		justifyContent: 'center',
 	},
-	visitText: { color: '#e94560', fontWeight: '600', fontSize: 14 },
+	badge: {
+		position: 'absolute',
+		top: 12,
+		left: 12,
+		backgroundColor: '#f0a500',
+		borderRadius: 6,
+		paddingHorizontal: 10,
+		paddingVertical: 4,
+	},
+	badgeTexto: {
+		color: '#000',
+		fontSize: 10,
+		fontWeight: '800',
+		letterSpacing: 0.5,
+	},
+	cuerpo: { padding: 16 },
+	fecha: { color: '#f0a500', fontSize: 12, fontWeight: '600', marginBottom: 8 },
+	titulo: {
+		color: '#f0f0f0',
+		fontSize: 17,
+		fontWeight: 'bold',
+		lineHeight: 24,
+		marginBottom: 8,
+	},
+	resumen: { color: '#666', fontSize: 13, lineHeight: 20, marginBottom: 12 },
+	leerMas: {
+		color: '#f0a500',
+		fontWeight: '700',
+		fontSize: 13,
+		textAlign: 'right',
+	},
+
+	cargandoTexto: { color: '#555', marginTop: 14, fontSize: 15 },
+	errorTexto: {
+		color: '#aaa',
+		textAlign: 'center',
+		fontSize: 14,
+		marginBottom: 20,
+	},
+	btnReintentar: {
+		backgroundColor: '#f0a500',
+		borderRadius: 12,
+		paddingVertical: 13,
+		paddingHorizontal: 30,
+	},
+	btnReintentarTexto: { color: '#000', fontWeight: 'bold', fontSize: 15 },
 })
